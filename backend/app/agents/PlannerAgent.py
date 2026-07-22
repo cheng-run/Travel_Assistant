@@ -100,9 +100,34 @@ def planner_node(state: dict) -> dict:
     llm = get_structured_llm()
     structured = llm.with_structured_output(TripPlan)
 
-    plan: TripPlan = structured.invoke([
-        SystemMessage(content=PLANNER_SYSTEM),
-        HumanMessage(content=user_prompt),
-    ])
+    try:
+        plan: TripPlan = structured.invoke([
+            SystemMessage(content=PLANNER_SYSTEM),
+            HumanMessage(content=user_prompt),
+        ])
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("旅行计划生成失败")
+        # 返回一个基础的空计划，避免整个流程崩溃
+        plan = TripPlan(
+            city=request.city,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            days=[],
+            weather_info=weather,
+            overall_suggestions="AI 规划生成失败，请稍后重试",
+        )
+
+    if plan is None:
+        import logging
+        logging.getLogger(__name__).error("旅行计划生成返回 None")
+        plan = TripPlan(
+            city=request.city,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            days=[],
+            weather_info=weather,
+            overall_suggestions="AI 规划生成失败，请稍后重试",
+        )
 
     return {STATE_FINAL_PLAN: plan}

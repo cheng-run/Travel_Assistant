@@ -5,6 +5,8 @@ HotelAgent — 酒店搜索节点 (LangGraph)
 搜索酒店，然后结构化解析为 list[Hotel]。
 """
 
+import logging
+
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -40,45 +42,56 @@ async def hotel_search_node(state: dict) -> dict:
     Returns:
         dict: {STATE_HOTELS: list[Hotel]}
     """
-    request = state[STATE_REQUEST]
+    logger = logging.getLogger(__name__)
+    try:
+        request = state[STATE_REQUEST]
 
-    # ── 1. 准备 LLM ──────────────────────────────────────────────────────────
-    llm = get_llm_for_agent(AGENT_HOTEL)
+        # ── 1. 准备 LLM ──────────────────────────────────────────────────────
+        llm = get_llm_for_agent(AGENT_HOTEL)
 
-    # ── 2. 获取并筛选 MCP 工具 ───────────────────────────────────────────────
-    all_tools = await get_mcp_tools()
-    search_tools = [t for t in all_tools if t.name in HOTEL_SEARCH_TOOLS]
+        # ── 2. 获取并筛选 MCP 工具 ───────────────────────────────────────────
+        all_tools = await get_mcp_tools()
+        search_tools = [t for t in all_tools if t.name in HOTEL_SEARCH_TOOLS]
 
-    # ── 3. 构建搜索提示 ──────────────────────────────────────────────────────
-    accommodation = request.accommodation or "未指定"
-    target_min = max(HOTELS_MIN_COUNT, request.days + HOTELS_PER_DAY_FACTOR)
+        # ── 3. 构建搜索提示 ──────────────────────────────────────────────────
+        accommodation = request.accommodation or "未指定"
+        target_min = max(HOTELS_MIN_COUNT, request.days + HOTELS_PER_DAY_FACTOR)
 
-    search_prompt = HOTEL_SEARCH_USER.format(
-        city=request.city,
-        accommodation=accommodation,
-        days=request.days,
-        extra=request.free_text_input or "无",
-        target_min=target_min,
-        target_max=target_min + 3,
-    )
+        search_prompt = HOTEL_SEARCH_USER.format(
+            city=request.city,
+            accommodation=accommodation,
+            days=request.days,
+            extra=request.free_text_input or "无",
+            target_min=target_min,
+            target_max=target_min + 3,
+        )
 
-    # ── 4. 创建 ReAct Agent 并执行搜索 ────────────────────────────────────────
-    agent = create_agent(llm, search_tools)
-    result = await agent.ainvoke({
-        "messages": [
-            SystemMessage(content=HOTEL_SEARCH_SYSTEM),
-            HumanMessage(content=search_prompt),
-        ],
-    })
+        # ── 4. 创建 ReAct Agent 并执行搜索 ────────────────────────────────────
+        agent = create_agent(llm, search_tools)
+        result = await agent.ainvoke({
+            "messages": [
+                SystemMessage(content=HOTEL_SEARCH_SYSTEM),
+                HumanMessage(content=search_prompt),
+            ],
+        })
 
-    # ── 5. 结构化解析为 Hotel 列表 ───────────────────────────────────────────
-    final_message = result["messages"][-1].content
-    parser_llm = get_structured_llm()
-    structured = parser_llm.with_structured_output(_HotelList)
+        # ── 5. 结构化解析为 Hotel 列表 ───────────────────────────────────────
+        final_message = result["messages"][-1].content
+        parser_llm = get_structured_llm()
+        structured = parser_llm.with_structured_output(_HotelList)
 
-    parse_result: _HotelList = await structured.ainvoke([
-        SystemMessage(content=HOTEL_PARSE_SYSTEM),
-        HumanMessage(content=final_message),
-    ])
+        parse_result: _HotelList = await structured.ainvoke([
+            SystemMessage(content=HOTEL_PARSE_SYSTEM),
+            HumanMessage(content=final_message),
+        ])
 
-    return {STATE_HOTELS: parse_result.hotels}
+        if parse_result is None:
+            logger.error("酒店结构化解析返回 None")
+            return {STATE_HOTELS: []}
+
+        hotels = getattr(parse_result, "hotels", None)
+        return {STATE_HOTELS: hotels if hotels else []}
+
+    except Exception:
+        logger.exception("酒店搜索失败，返回空列表")
+        return {STATE_HOTELS: []}

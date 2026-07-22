@@ -18,6 +18,47 @@ class Attraction(BaseModel):
     image_url: Optional[str] = Field(default=None,description="图片URL")
     ticket_price: int = Field(default=0,ge=0,description="门票价格(元)")
 
+# ── Unsplash 图片 ────────────────────────────────────────────────────
+
+
+class UnsplashImageUrls(BaseModel):
+    """Unsplash 图片各尺寸 URL"""
+
+    raw: str = Field(..., description="原始尺寸URL")
+    full: str = Field(..., description="全尺寸URL")
+    regular: str = Field(..., description="常规尺寸URL(推荐,1080px)")
+    small: str = Field(..., description="小尺寸URL(400px)")
+    thumb: str = Field(..., description="缩略图URL(200px)")
+
+
+class UnsplashImage(BaseModel):
+    """Unsplash 单张图片信息"""
+
+    image_id: str = Field(..., description="图片唯一ID")
+    description: Optional[str] = Field(default=None, description="图片描述")
+    alt_description: Optional[str] = Field(default=None, description="替代描述")
+    width: int = Field(..., description="图片宽度(px)")
+    height: int = Field(..., description="图片高度(px)")
+    urls: UnsplashImageUrls = Field(..., description="各尺寸URL")
+    photographer_name: str = Field(..., description="摄影师名称")
+    photographer_url: str = Field(..., description="摄影师主页URL")
+
+    @field_validator("description", mode="before")
+    @classmethod
+    def default_description(cls, v):
+        """如果 description 为空，用 alt_description 兜底"""
+        return v or None
+
+
+class UnsplashSearchResult(BaseModel):
+    """Unsplash 图片搜索结果"""
+
+    query: str = Field(..., description="搜索关键词")
+    total: int = Field(..., description="总结果数")
+    images: list[UnsplashImage] = Field(default_factory=list, description="图片列表")
+    has_results: bool = Field(default=True, description="是否有结果")
+
+
 class Meal(BaseModel):
     """餐饮信息"""
     type: str = Field(...,description="餐饮类型:breakfast/lunch/dinner/snack")
@@ -69,7 +110,9 @@ class WeatherInfo(BaseModel):
     
     @field_validator('day_temp','night_temp',mode='before')
     def parse_temperature(cls,v):
-        """解析温度字符串："16°C" -> 16"""
+        """解析温度字符串："16°C" -> 16，None 或非法值 → 0"""
+        if v is None:
+            return 0
         if isinstance(v,str):
             v = v.replace('°C','').replace('℃','').replace('°','').strip()
             try:

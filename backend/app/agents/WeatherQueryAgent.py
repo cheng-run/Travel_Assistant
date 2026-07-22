@@ -5,6 +5,8 @@ WeatherQueryAgent — 天气查询节点 (LangGraph)
 然后结构化解析为 list[WeatherInfo]。
 """
 
+import logging
+
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
@@ -38,41 +40,51 @@ async def weather_query_node(state: dict) -> dict:
     Returns:
         dict: {STATE_WEATHER: list[WeatherInfo]}
     """
-    request = state[STATE_REQUEST]
+    logger = logging.getLogger(__name__)
+    try:
+        request = state[STATE_REQUEST]
 
-    # ── 1. 准备 LLM ──────────────────────────────────────────────────────────
-    llm = get_llm_for_agent(AGENT_WEATHER)
+        # ── 1. 准备 LLM ──────────────────────────────────────────────────────
+        llm = get_llm_for_agent(AGENT_WEATHER)
 
-    # ── 2. 获取并筛选 MCP 工具 ───────────────────────────────────────────────
-    all_tools = await get_mcp_tools()
-    weather_tools = [t for t in all_tools if t.name in WEATHER_TOOLS]
+        # ── 2. 获取并筛选 MCP 工具 ───────────────────────────────────────────
+        all_tools = await get_mcp_tools()
+        weather_tools = [t for t in all_tools if t.name in WEATHER_TOOLS]
 
-    # ── 3. 构建查询提示 ──────────────────────────────────────────────────────
-    query_prompt = WEATHER_SEARCH_USER.format(
-        city=request.city,
-        start_date=request.start_date,
-        end_date=request.end_date,
-        days=request.days,
-        extra=request.free_text_input or "无",
-    )
+        # ── 3. 构建查询提示 ──────────────────────────────────────────────────
+        query_prompt = WEATHER_SEARCH_USER.format(
+            city=request.city,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            days=request.days,
+            extra=request.free_text_input or "无",
+        )
 
-    # ── 4. 创建 ReAct Agent 并执行查询 ────────────────────────────────────────
-    agent = create_agent(llm, weather_tools)
-    result = await agent.ainvoke({
-        "messages": [
-            SystemMessage(content=WEATHER_SEARCH_SYSTEM),
-            HumanMessage(content=query_prompt),
-        ],
-    })
+        # ── 4. 创建 ReAct Agent 并执行查询 ────────────────────────────────────
+        agent = create_agent(llm, weather_tools)
+        result = await agent.ainvoke({
+            "messages": [
+                SystemMessage(content=WEATHER_SEARCH_SYSTEM),
+                HumanMessage(content=query_prompt),
+            ],
+        })
 
-    # ── 5. 结构化解析为 WeatherInfo 列表 ──────────────────────────────────────
-    final_message = result["messages"][-1].content
-    parser_llm = get_structured_llm()
-    structured = parser_llm.with_structured_output(_WeatherList)
+        # ── 5. 结构化解析为 WeatherInfo 列表 ──────────────────────────────────
+        final_message = result["messages"][-1].content
+        parser_llm = get_structured_llm()
+        structured = parser_llm.with_structured_output(_WeatherList)
 
-    parse_result: _WeatherList = await structured.ainvoke([
-        SystemMessage(content=WEATHER_PARSE_SYSTEM),
-        HumanMessage(content=final_message),
-    ])
+        parse_result: _WeatherList = await structured.ainvoke([
+            SystemMessage(content=WEATHER_PARSE_SYSTEM),
+            HumanMessage(content=final_message),
+        ])
 
-    return {STATE_WEATHER: parse_result.weather_info}
+        if parse_result is None:
+            logger.error("天气结构化解析返回 None")
+            return {STATE_WEATHER: []}
+
+        return {STATE_WEATHER: parse_result.weather_info}
+
+    except Exception:
+        logger.exception("天气查询失败，返回空列表")
+        return {STATE_WEATHER: []}
